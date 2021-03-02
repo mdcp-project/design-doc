@@ -1,0 +1,30 @@
+version: "3"
+
+services: 
+  db:
+    image: postgres
+    environment: 
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: scrtpsswd
+      POSTGRES_DB: mdcp
+
+  auth:
+    build:
+      context: .
+      dockerfile: auth/Dockerfile
+    environment: 
+      SQLALCHEMY_DATABASE_URI: "postgresql://admin:scrtpsswd@db:5432/mdcp"
+    ports: 
+      - "5000:5000"
+
+  user:
+    build: 
+      context: .
+      dockerfile: user/Dockerfile
+    environment: 
+      AUTH_URL: auth
+      AUTH_PORT: 5000
+    depends_on: 
+      - auth
+
+    
