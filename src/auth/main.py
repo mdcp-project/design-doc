@@ -4,9 +4,10 @@ import uvicorn
 import secrets
 import utils
 import datetime
+import jwt
 
 from db import SessionLocal, engine
-import models, schemas, utils
+import models, schemas, utils, constants
 
 from sqlalchemy.orm import Session
 
@@ -48,9 +49,21 @@ def signin(credentials: Credentials, db: Session = Depends(get_db)):
         raise HTTPException(403, detail="Wrong email/password")
     return {"access_token": at, "refresh_token": rt, "result_code": 200}
 
-@app.get('/validate/token')
-def validate(token: Token):
-    pass
+@app.get('/validate')
+def validate(token: Token, db: Session = Depends(get_db)):
+    try:
+        decoded_token = utils.decode_access_token(data=token.token)
+    except jwt.ExpiredSignatureError as err:
+        raise HTTPException(403, detail="Token expired")
+    except jwt.DecodeError as err:
+        raise HTTPException(403, detail="Invalid token")
+
+    session_id = decoded_token["session"]
+    session = db.query(models.Session).get(session_id)
+    if session is None:
+        raise HTTPException(403, detail="Session not found")
+    return {"result_code": 200, "is_valid": True}
+    
 
 def get_user_by_email(db: Session, email: str):
     return db.query(models.User).filter(models.User.email == email).first()
@@ -90,7 +103,7 @@ def create_session(db: Session, user: schemas.UserAuthenticate):
     now = datetime.datetime.utcnow()
     access_token, refresh_token = create_tokens(db_user.email, session, now)
     session.refreshToken = refresh_token
-    session.refreshTokenExpirationDate = now + datetime.timedelta(minutes = 15)
+    session.refreshTokenExpirationDate = now + datetime.timedelta(minutes = constants.TIMEDELTA)
     #db.add(session)
     db.commit()
     db.refresh(session)
