@@ -1,10 +1,12 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Query
 from pydantic import BaseModel
 import uvicorn
 import secrets
 import utils
 import datetime
 import jwt
+import pika
+import json
 
 from db import SessionLocal, engine
 import models, schemas, utils, constants
@@ -39,13 +41,15 @@ def signup(credentials: Credentials, db: Session = Depends(get_db)):
     if get_user_by_email(db, credentials.email):
         raise HTTPException(402, detail="User with that email already exists")
     user = create_user(db, schemas.UserCreate(email=credentials.email, password=credentials.password))
+    send_email(user.email)
     return {"result_code": 200, "user_id": user.id, "user_email": user.email}
 
 @app.get('/signin')
 def signin(credentials: Credentials, db: Session = Depends(get_db)):
-    print(db, flush=True)
     at, rt, session = create_session(db, schemas.UserAuthenticate(email=credentials.email, password=credentials.password))
     if at is None:
+        if rt is not None:
+            raise HTTPException(403, detail=rt)
         raise HTTPException(403, detail="Wrong email/password")
     return {"access_token": at, "refresh_token": rt, "result_code": 200}
 
@@ -63,6 +67,15 @@ def validate(token: Token, db: Session = Depends(get_db)):
     if session is None:
         raise HTTPException(403, detail="Session not found")
     return {"result_code": 200, "is_valid": True}
+
+@app.post('/confirm')
+def confirm(email: str = Query(...), db: Session = Depends(get_db)):
+    user = get_user_by_email(db, email)
+    if not user:
+        raise HTTPException(403, detail="User with that email is not found")
+    user.is_confirmed = True
+    db.commit()
+    return {"result_code": 200, "is_confirmed": True}
     
 
 def get_user_by_email(db: Session, email: str):
@@ -70,6 +83,7 @@ def get_user_by_email(db: Session, email: str):
 
 def create_user(db: Session, user: schemas.UserCreate):
     db_user = models.User(email=user.email)
+    db_user.is_confirmed = False
     db_user.set_password(user.password)
     db.add(db_user)
     db.commit()
@@ -93,6 +107,9 @@ def create_session(db: Session, user: schemas.UserAuthenticate):
     
     db_user = get_user_by_email(db, user.email)
 
+    if not db_user.is_confirmed:
+        return None, "User is not confirmed", None
+
     session = db.query(models.Session).filter(models.Session.userId == db_user.id).first()
     if session is None:
         session = models.Session(userId=db_user.id)
@@ -108,6 +125,13 @@ def create_session(db: Session, user: schemas.UserAuthenticate):
     db.commit()
     db.refresh(session)
     return access_token, refresh_token, session
+
+def send_email(email: str):
+    connection = pika.BlockingConnection(pika.ConnectionParameters(constants.RBMQ_ADDRESS))
+    channel = connection.channel()
+    channel.queue_declare("email")
+    body = json.dumps({"email": email, "url": f"{constants.ENDPOINT}/confirm?email={email}"})
+    channel.basic_publish("", routing_key="email", body=body)
 
 if __name__ == '__main__':
     uvicorn.run(app, host='0.0.0.0', port=5000)

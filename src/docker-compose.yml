@@ -14,8 +14,17 @@ services:
       dockerfile: auth/Dockerfile
     environment: 
       SQLALCHEMY_DATABASE_URL: "postgresql://admin:scrtpsswd@db:5432/mdcp"
+      QUEUE_NAME: "email"
+      RBMQ_ADDRESS: rabbitmq
     ports: 
       - "5000:5000"
+    depends_on: 
+      - rabbitmq
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports: 
+      - "15672:15672"
 
   # user:
   #   build: 
